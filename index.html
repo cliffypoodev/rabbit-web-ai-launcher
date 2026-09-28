@@ -29,14 +29,18 @@ button span{display:block;margin-top:2px;color:#9d9b97;font:9px monospace}
 </div>
 <div id="status"></div>
 <script>
+const targets = {
+  chatgpt: "https://chatgpt.com/",
+  gemini: "https://gemini.google.com/app",
+  claude: "https://claude.ai/new",
+  deepseek: "https://chat.deepseek.com/",
+  qwen: "https://modelstudio.alibabacloud.com/"
+};
 function openAI(id){
   const status=document.getElementById('status');
+  const url=targets[id];
   status.textContent='opening '+id+'…';
-  const direct='rabbitwebai://open/'+id;
-  const intent='intent://open/'+id+'#Intent;scheme=rabbitwebai;package=ai.hermes.rabbit;end';
-  window.location.href=intent;
-  setTimeout(()=>{ window.location.href=direct; },600);
-  setTimeout(()=>{ status.textContent='tap again if the browser did not open'; },1800);
+  window.location.href=url;
 }
 </script>
 </body>
