@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=240,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Web AI</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;min-height:100%;background:#090909;color:#f6f4ef;font-family:Arial,sans-serif}
+body{padding:12px}
+h1{font-size:28px;line-height:1;margin:0 0 5px}
+p{margin:0 0 12px;color:#a9a7a2;font:11px/1.25 monospace}
+.grid{display:grid;gap:7px}
+button{width:100%;min-height:42px;border:1px solid #333;border-radius:12px;background:#181818;color:#fff;text-align:left;padding:7px 12px;font:bold 17px Arial,sans-serif}
+button span{display:block;margin-top:2px;color:#9d9b97;font:9px monospace}
+#status{margin-top:9px;color:#fe5000;font:9px monospace;min-height:12px}
+</style>
+</head>
+<body>
+<h1>WEB AI</h1>
+<p>signed-in web apps · no API</p>
+<div class="grid">
+<button onclick="openAI('chatgpt')">ChatGPT<span>OpenAI ↗</span></button>
+<button onclick="openAI('gemini')">Gemini<span>Google ↗</span></button>
+<button onclick="openAI('claude')">Claude<span>Anthropic ↗</span></button>
+<button onclick="openAI('deepseek')">DeepSeek<span>DeepSeek ↗</span></button>
+<button onclick="openAI('qwen')">Qwen Studio<span>Alibaba Cloud ↗</span></button>
+</div>
+<div id="status"></div>
+<script>
+function openAI(id){
+  const status=document.getElementById('status');
+  status.textContent='opening '+id+'…';
+  const direct='rabbitwebai://open/'+id;
+  const intent='intent://open/'+id+'#Intent;scheme=rabbitwebai;package=ai.hermes.rabbit;end';
+  window.location.href=intent;
+  setTimeout(()=>{ window.location.href=direct; },600);
+  setTimeout(()=>{ status.textContent='tap again if the browser did not open'; },1800);
+}
+</script>
+</body>
+</html>
