@@ -114,7 +114,7 @@ function enter(n){E.title.value=n.title||"";E.body.innerHTML=n.body||"";E.title.
 function capture(){if(!S.note||S.note.readOnly)return;S.note.title=E.title.value;S.note.body=E.body.innerHTML;S.note.updatedAt=now()}
 function dirty(){if(!S.note||S.note.readOnly)return;capture();E.save.textContent="Saving";clearTimeout(S.timer);S.timer=setTimeout(()=>save(false),350)}
 async function save(force){if(!S.note||S.note.readOnly)return;capture();const n=S.note;try{await set(K.pending(n.id),n);const old=await get(K.note(n.id));if(old)await set(K.prev(n.id),old);await set(K.note(n.id),n);await del(K.pending(n.id));const i=S.index.findIndex(x=>x.id===n.id);if(i>=0)S.index[i]=meta(n);else S.index.unshift(meta(n));await set(K.index,S.index);await queueVault({method:"PUT",path:"/v1/notes/"+encodeURIComponent(n.id),body:vaultNote(n)});E.save.textContent="Saved";if(force)await render()}catch(e){E.save.textContent="Retry";toast("Save failed; recovery copy kept")}}
-async function back(){if(S.note&&S.note.readOnly){S.note=null;view(E.lib);await render();return}await save(true);if(S.note&&!S.note.title&&!strip(S.note.body)){const id=S.note.id;S.index=S.index.filter(x=>x.id!==id);await del(K.note(id));await del(K.prev(id));await del(K.pending(id));await set(K.index,S.index);await queueVault({method:"PUT",path:"/v1/notes/"+encodeURIComponent(id),body:{id,deleted:true,updated_at:now()}})}S.note=null;view(E.lib);await render()}
+async function back(){if(S.meeting&&S.meeting.recording&&S.note&&S.meeting.noteId===S.note.id){toast("Stop recording before leaving");return}if(S.note&&S.note.readOnly){S.note=null;view(E.lib);await render();return}await save(true);if(S.note&&!S.note.title&&!strip(S.note.body)){const id=S.note.id;S.index=S.index.filter(x=>x.id!==id);await del(K.note(id));await del(K.prev(id));await del(K.pending(id));await set(K.index,S.index);await queueVault({method:"PUT",path:"/v1/notes/"+encodeURIComponent(id),body:{id,deleted:true,updated_at:now()}})}S.note=null;view(E.lib);await render()}
 function doSearch(){const q=E.q.value.trim().toLowerCase();let items=[];if(q){items=S.index.filter(m=>!m.trashed&&((m.title||"")+" "+(m.preview||"")+" "+(m.searchText||"")).toLowerCase().includes(q));items=items.concat(S.conversations.filter(m=>((m.title||"")+" "+(m.preview||"")).toLowerCase().includes(q)).map(x=>Object.assign({_kind:"conversation"},x)));items.sort((a,b)=>b.updatedAt-a.updatedAt)}rows(E.results,items,false);E.noResults.hidden=!q||!!items.length}
 function dialog(title,mode,value=""){return new Promise(resolve=>{E.modalTitle.textContent=title;E.modal.hidden=false;E.scrim.hidden=false;E.modalInput.hidden=mode!=="input";E.modalText.hidden=mode!=="text";const el=mode==="input"?E.modalInput:E.modalText;el.value=value;setTimeout(()=>el.focus(),30);const done=v=>{E.modal.hidden=true;E.scrim.hidden=true;$("okModal").onclick=null;$("cancelModal").onclick=null;resolve(v)};$("okModal").onclick=()=>done(el.value);$("cancelModal").onclick=()=>done(null)})}
 async function addFolder(){const name=(await dialog("New folder","input","")||"").trim();if(!name)return;const f={id:uid(),name};S.folders.push(f);await set(K.folders,S.folders);await queueVault({method:"PUT",path:"/v1/folders/"+encodeURIComponent(f.id),body:f});renderFolders();toast("Folder added")}
@@ -133,10 +133,119 @@ async function applyChange(ch){const p=ch.payload;if(!p)return;if(ch.entity_type
 async function pullVault(){let after=+S.settings.syncCursor||0;for(let pass=0;pass<5;pass++){const d=await vaultFetch("/v1/sync?after="+after+"&limit=250");for(const ch of d.changes||[])await applyChange(ch);after=+d.cursor||after;S.settings.syncCursor=after;await set(K.settings,S.settings);if(!d.changes||d.changes.length<250||after>=d.latest_cursor)break}}
 async function syncNow(show){if(S.syncing)return;S.syncing=true;const badge=$("syncBadge");if(badge)badge.textContent="...";try{await flushOutbox();await pullVault();if(badge)badge.textContent="✓";if(show)toast("Synced with Angela");await render()}catch(e){if(badge)badge.textContent="Offline";if(show)toast("Angela offline — saved locally")}finally{S.syncing=false}}
 
+
+function fmtElapsed(ms){const s=Math.max(0,Math.floor(ms/1000));return String(Math.floor(s/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0")}
+function meetingSummaryHtml(m){
+  const s=m.summary||{},cite=a=>(a||[]).map(x=>'<button class="cite" data-cite="'+h(x)+'">'+h(x)+'</button>').join("");
+  const section=(title,arr,render)=>{if(!arr||!arr.length)return"";return'<section class="aiSection"><h3>'+h(title)+'</h3>'+arr.map(render).join("")+'</section>'};
+  let out='<div class="aiIntro">AI additions are evidence-linked. Tap a citation to inspect the transcript.</div>';
+  if(s.summary)out+='<p class="aiSummary">'+h(s.summary)+'</p>';
+  out+=section("Key points",s.key_points,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+(x.confidence!=null?' · '+Math.round(Number(x.confidence)*100)+'%':'')+'</div></div>');
+  out+=section("Decisions",s.decisions,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
+  out+=section("Actions",s.action_items,x=>'<div class="aiItem">'+h(x.task||"")+(x.owner?' — '+h(x.owner):'')+(x.due?' · '+h(x.due):'')+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
+  out+=section("Open questions",s.open_questions,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
+  out+=section("Risks",s.risks,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
+  out+=section("Follow-ups",s.follow_ups,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
+  out+=section("Uncertain",s.uncertainties,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
+  return out||'<div class="empty">No AI summary yet.</div>';
+}
+function transcriptHtml(m){const segs=m.segments||[];if(!segs.length)return'<div class="empty"><b>No transcript yet</b>Transcript segments appear here as audio is processed.</div>';return segs.map(x=>'<div class="segment" id="seg-'+h(x.citation)+'"><div class="segmentTop"><b>'+h(x.speaker_label||"Speaker")+'</b><span>'+fmtElapsed(x.start_ms||0)+'</span><span>'+h(x.citation||"")+'</span></div><div>'+h(x.text||"")+'</div></div>').join("")}
+function bindCitations(){document.querySelectorAll(".cite").forEach(b=>b.onclick=()=>{const id=b.dataset.cite;renderMeeting("transcript");setTimeout(()=>{const el=$("seg-"+id);if(el){el.scrollIntoView({block:"center"});el.classList.add("flash");setTimeout(()=>el.classList.remove("flash"),1200)}},20)})}
+function renderMeeting(tab){
+  if(!S.note||!S.note.metadata||S.note.metadata.kind!=="meeting")return;
+  S.meetingTab=tab||S.meetingTab||"notes";const m=S.note.metadata.meeting||{};
+  document.querySelectorAll("[data-mtab]").forEach(b=>b.classList.toggle("active",b.dataset.mtab===S.meetingTab));
+  E.body.hidden=S.meetingTab!=="notes";$("aiPane").hidden=S.meetingTab!=="ai";$("transcriptPane").hidden=S.meetingTab!=="transcript";
+  const active=!!(S.meeting&&S.meeting.recording&&S.meeting.noteId===S.note.id);
+  $("recDot").classList.toggle("live",active);
+  $("meetingStatus").textContent=active?"Recording":m.status==="ready"?"Ready":m.status==="enhancing"?"Enhancing…":m.status==="transcribing"?"Transcribing…":m.status==="error"?"Needs attention":"Meeting";
+  const started=active?S.meeting.startAt:(m.started_at||S.note.createdAt||now());
+  $("meetingElapsed").textContent=fmtElapsed(active?now()-started:Math.max(0,(m.ended_at||now())-started));
+  $("meetingMark").disabled=!active;
+  $("meetingStop").disabled=!(active||m.status==="recording");
+  $("meetingEnhance").disabled=active||!(m.segments||[]).length;
+  if(S.meetingTab==="ai"){$("aiPane").innerHTML=meetingSummaryHtml(m);bindCitations()}
+  if(S.meetingTab==="transcript")$("transcriptPane").innerHTML=transcriptHtml(m);
+}
+function clearMeetingPoll(){if(S.meetingPoll){clearInterval(S.meetingPoll);S.meetingPoll=null}}
+async function refreshMeeting(){
+  if(!S.note||!S.note.metadata||S.note.metadata.kind!=="meeting")return;
+  try{
+    const p=await vaultFetch("/v1/notes/"+encodeURIComponent(S.note.id));
+    if(p&&p.id){
+      const fresh=fromVaultNote(p);
+      S.note.metadata=fresh.metadata||S.note.metadata||{};
+      if((!E.title.value||E.title.value==="New Meeting")&&fresh.title){S.note.title=fresh.title;E.title.value=fresh.title}
+      S.note.updatedAt=Math.max(S.note.updatedAt||0,fresh.updatedAt||0);
+      await set(K.note(S.note.id),S.note);
+      const i=S.index.findIndex(x=>x.id===S.note.id);if(i>=0)S.index[i]=meta(S.note);else S.index.unshift(meta(S.note));await set(K.index,S.index);
+      renderMeeting(S.meetingTab);
+    }
+  }catch(e){}
+}
+function startMeetingPoll(){clearMeetingPoll();S.meetingPoll=setInterval(refreshMeeting,5000);setTimeout(refreshMeeting,200)}
+function openMeetingModal(){
+  $("meetingTitle").value="";$("meetingTemplate").value="general";$("meetingParticipants").value="";$("meetingVocab").value="";$("meetingConsent").checked=false;$("meetingKeepAudio").checked=false;
+  $("meetingModal").hidden=false;E.scrim.hidden=false;setTimeout(()=>$("meetingTitle").focus(),20)
+}
+function closeMeetingModal(){$("meetingModal").hidden=true;if(!S.sheet)E.scrim.hidden=true}
+function pickRecorderType(){if(!window.MediaRecorder)return"";for(const t of ["audio/webm;codecs=opus","audio/webm","audio/ogg;codecs=opus"]){if(!MediaRecorder.isTypeSupported||MediaRecorder.isTypeSupported(t))return t}return""}
+async function meetingRaw(path,blob){
+  const ctl=new AbortController(),timer=setTimeout(()=>ctl.abort(),300000);
+  try{const r=await fetch(VAULT_URL+path,{method:"POST",headers:{"Content-Type":blob.type||"audio/webm"},body:blob,signal:ctl.signal,cache:"no-store"});const t=await r.text();let d={};try{d=t?JSON.parse(t):{}}catch(e){}if(!r.ok)throw new Error(d.error||("Vault "+r.status));return d}finally{clearTimeout(timer)}
+}
+async function uploadMeetingChunk(blob,index,startMs){
+  if(!S.note)return;
+  $("meetingStatus").textContent="Transcribing…";
+  const d=await meetingRaw("/v1/notes/"+encodeURIComponent(S.note.id)+"/meeting/audio/"+index+"?start_ms="+Math.max(0,Math.round(startMs)),blob);
+  if(d.note&&d.note.metadata){S.note.metadata=d.note.metadata;await set(K.note(S.note.id),S.note)}
+  if(d.segments&&d.segments.length)renderMeeting(S.meetingTab);
+}
+async function beginMeeting(){
+  if(!$("meetingConsent").checked){toast("Confirm consent first");return}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){toast("Microphone recording is unavailable here");return}
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}catch(e){toast("Microphone permission is required");return}
+  try{
+    const payload={title:$("meetingTitle").value.trim()||"New Meeting",template:$("meetingTemplate").value,participants:$("meetingParticipants").value.split(",").map(x=>x.trim()).filter(Boolean),custom_vocabulary:$("meetingVocab").value.split(",").map(x=>x.trim()).filter(Boolean),consent_confirmed:true,keep_audio:$("meetingKeepAudio").checked};
+    const p=await vaultFetch("/v1/meetings/start",{method:"POST",body:payload}),n=fromVaultNote(p);
+    n.body="";n.folderId=null;S.note=n;const i=S.index.findIndex(x=>x.id===n.id);if(i>=0)S.index[i]=meta(n);else S.index.unshift(meta(n));await set(K.note(n.id),n);await set(K.index,S.index);
+    const mime=pickRecorderType(),rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);
+    S.meeting={noteId:n.id,stream,recorder:rec,recording:true,startAt:now(),nextStartMs:0,chunkIndex:1,uploadChain:Promise.resolve(),tick:null};
+    rec.ondataavailable=e=>{if(!e.data||!e.data.size||!S.meeting)return;const idx=S.meeting.chunkIndex++,start=S.meeting.nextStartMs;S.meeting.nextStartMs=Math.max(start+1,now()-S.meeting.startAt);S.meeting.uploadChain=S.meeting.uploadChain.then(()=>uploadMeetingChunk(e.data,idx,start)).catch(err=>{toast("A meeting chunk could not sync");console.error(err)})};
+    rec.onerror=()=>toast("Recorder error — your typed notes are still safe");
+    rec.start(60000);S.meeting.tick=setInterval(()=>renderMeeting(S.meetingTab),1000);closeMeetingModal();enter(n);toast("Recording");
+  }catch(e){stream.getTracks().forEach(t=>t.stop());toast("Could not start meeting")}
+}
+async function stopMeeting(){
+  if(!S.note||!S.note.metadata||S.note.metadata.kind!=="meeting")return;
+  const active=S.meeting&&S.meeting.recording&&S.meeting.noteId===S.note.id;
+  try{
+    await save(false);try{await flushOutbox()}catch(e){}
+    if(active){
+      S.meeting.recording=false;$("meetingStatus").textContent="Finishing…";
+      await new Promise(resolve=>{S.meeting.recorder.addEventListener("stop",resolve,{once:true});S.meeting.recorder.stop()});
+      S.meeting.stream.getTracks().forEach(t=>t.stop());if(S.meeting.tick)clearInterval(S.meeting.tick);await S.meeting.uploadChain;S.meeting=null;
+    }
+    await vaultFetch("/v1/notes/"+encodeURIComponent(S.note.id)+"/meeting/finish",{method:"POST",body:{}});
+    if(S.note.metadata&&S.note.metadata.meeting)S.note.metadata.meeting.status="transcribing";
+    renderMeeting("ai");startMeetingPoll();toast("Building meeting notes");
+  }catch(e){toast("Could not finish meeting")}
+}
+async function markMeeting(){
+  if(!S.meeting||!S.meeting.recording||!S.note)return;
+  const elapsed=now()-S.meeting.startAt;
+  try{await vaultFetch("/v1/notes/"+encodeURIComponent(S.note.id)+"/meeting/highlight",{method:"POST",body:{elapsed_ms:elapsed,note:""}});toast("Marked "+fmtElapsed(elapsed))}catch(e){toast("Mark could not sync")}
+}
+async function enhanceMeeting(){
+  if(!S.note)return;
+  try{await save(false);try{await flushOutbox()}catch(e){};await vaultFetch("/v1/notes/"+encodeURIComponent(S.note.id)+"/meeting/enhance",{method:"POST",body:{}});if(S.note.metadata&&S.note.metadata.meeting)S.note.metadata.meeting.status="enhancing";renderMeeting("ai");startMeetingPoll();toast("Enhancing")}catch(e){toast("Enhance failed")}
+}
+
 function checklist(){E.body.focus();const s=getSelection();if(!s.rangeCount)return;const r=s.getRangeAt(0),wrap=document.createElement("div");wrap.className="check";wrap.contentEditable="false";wrap.innerHTML='<input type="checkbox"><span contenteditable="true">Checklist item</span>';r.deleteContents();r.insertNode(wrap);const sp=wrap.querySelector("span"),nr=document.createRange();nr.selectNodeContents(sp);nr.collapse(false);s.removeAllRanges();s.addRange(nr);dirty()}
 async function backup(){const notes=[];for(const m of S.index){const n=await get(K.note(m.id));if(n)notes.push(n)}const payload=enc({schema:2,exportedAt:now(),folders:S.folders,settings:S.settings,notes});const v=await dialog("Backup - copy this text","text",payload);if(v!==null){try{await navigator.clipboard.writeText(payload);toast("Backup copied")}catch(e){toast("Select and copy the backup")}}}
 async function restore(){const raw=await dialog("Paste backup","text","");if(!raw)return;try{const d=dec(raw.trim());if(!Array.isArray(d.notes))throw 0;for(const n of d.notes)await set(K.note(n.id),n);S.index=d.notes.map(meta);S.folders=d.folders||[];S.settings=Object.assign(S.settings,d.settings||{});await set(K.index,S.index);await set(K.folders,S.folders);await set(K.settings,S.settings);apply();renderFolders();await render();closeSheet();toast("Backup restored")}catch(e){toast("Invalid backup")}}
-function bind(){$("folders").onclick=()=>openSheet(E.folderSheet);$("new").onclick=create;$("search").onclick=()=>{view(E.searchView);E.q.value="";rows(E.results,[],false);E.noResults.hidden=true;setTimeout(()=>E.q.focus(),30)};$("searchBack").onclick=()=>view(E.lib);E.q.oninput=doSearch;$("back").onclick=back;$("more").onclick=()=>{if(!S.note)return;const ro=!!S.note.readOnly;$("makeNote").hidden=!ro;$("pin").hidden=ro;$("move").hidden=ro;$("trash").hidden=ro;$("pin").firstChild.textContent=S.note.pinned?"Unpin note":"Pin note";$("trash").firstChild.textContent=S.note.trashed?"Restore note":"Move to Trash";openSheet(E.moreSheet)};E.scrim.onclick=closeSheet;E.title.oninput=dirty;E.body.oninput=dirty;E.body.addEventListener("change",dirty);document.querySelectorAll("[data-cmd]").forEach(b=>b.onclick=()=>{E.body.focus();document.execCommand(b.dataset.cmd,false,b.dataset.value||null);dirty()});$("checkBtn").onclick=checklist;$("addFolder").onclick=addFolder;$("settings").onclick=()=>openSheet(E.settingsSheet);$("pin").onclick=pin;$("move").onclick=()=>openSheet(E.moveSheet);$("copy").onclick=copy;$("trash").onclick=trash;$("makeNote").onclick=makeConversationNote;$("syncNowBtn").onclick=()=>syncNow(true);E.fontSize.onchange=async()=>{S.settings.fontSize=+E.fontSize.value;apply();await set(K.settings,S.settings)};E.theme.onchange=async()=>{S.settings.theme=E.theme.value;apply();await set(K.settings,S.settings)};$("backup").onclick=backup;$("restore").onclick=restore;window.addEventListener("online",()=>syncNow(false));document.addEventListener("visibilitychange",()=>{if(document.hidden&&S.note&&!S.note.readOnly)save(false);else if(!document.hidden)syncNow(false)})}
+function bind(){$("folders").onclick=()=>openSheet(E.folderSheet);$("new").onclick=create;$("meetingNew").onclick=openMeetingModal;$("cancelMeeting").onclick=closeMeetingModal;$("startMeeting").onclick=beginMeeting;document.querySelectorAll("[data-mtab]").forEach(b=>b.onclick=()=>renderMeeting(b.dataset.mtab));$("meetingMark").onclick=markMeeting;$("meetingStop").onclick=stopMeeting;$("meetingEnhance").onclick=enhanceMeeting;$("search").onclick=()=>{view(E.searchView);E.q.value="";rows(E.results,[],false);E.noResults.hidden=true;setTimeout(()=>E.q.focus(),30)};$("searchBack").onclick=()=>view(E.lib);E.q.oninput=doSearch;$("back").onclick=back;$("more").onclick=()=>{if(!S.note)return;const ro=!!S.note.readOnly;$("makeNote").hidden=!ro;$("pin").hidden=ro;$("move").hidden=ro;$("trash").hidden=ro;$("pin").firstChild.textContent=S.note.pinned?"Unpin note":"Pin note";$("trash").firstChild.textContent=S.note.trashed?"Restore note":"Move to Trash";openSheet(E.moreSheet)};E.scrim.onclick=()=>{if(!$("meetingModal").hidden)closeMeetingModal();else closeSheet()};E.title.oninput=dirty;E.body.oninput=dirty;E.body.addEventListener("change",dirty);document.querySelectorAll("[data-cmd]").forEach(b=>b.onclick=()=>{E.body.focus();document.execCommand(b.dataset.cmd,false,b.dataset.value||null);dirty()});$("checkBtn").onclick=checklist;$("addFolder").onclick=addFolder;$("settings").onclick=()=>openSheet(E.settingsSheet);$("pin").onclick=pin;$("move").onclick=()=>openSheet(E.moveSheet);$("copy").onclick=copy;$("trash").onclick=trash;$("makeNote").onclick=makeConversationNote;$("syncNowBtn").onclick=()=>syncNow(true);E.fontSize.onchange=async()=>{S.settings.fontSize=+E.fontSize.value;apply();await set(K.settings,S.settings)};E.theme.onchange=async()=>{S.settings.theme=E.theme.value;apply();await set(K.settings,S.settings)};$("backup").onclick=backup;$("restore").onclick=restore;window.addEventListener("online",()=>syncNow(false));document.addEventListener("visibilitychange",()=>{if(document.hidden&&S.note&&!S.note.readOnly)save(false);else if(!document.hidden)syncNow(false)})}
 function hardware(){const target=()=>document.querySelector(".view.on .list")||document.querySelector(".view.on .editScroll");window.addEventListener("scrollUp",()=>{const t=target();if(t)t.scrollBy({top:-55,behavior:"smooth"})});window.addEventListener("scrollDown",()=>{const t=target();if(t)t.scrollBy({top:55,behavior:"smooth"})})}
 init();
 })();
