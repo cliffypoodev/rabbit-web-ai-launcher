@@ -201,6 +201,21 @@ async function uploadMeetingChunk(blob,index,startMs){
   if(d.note&&d.note.metadata){S.note.metadata=d.note.metadata;await set(K.note(S.note.id),S.note)}
   if(d.segments&&d.segments.length)renderMeeting(S.meetingTab);
 }
+function startRecorderChunk(){
+  const M=S.meeting;if(!M||!M.recording)return;
+  const mime=pickRecorderType(),rec=mime?new MediaRecorder(M.stream,{mimeType:mime}):new MediaRecorder(M.stream),parts=[],startMs=Math.max(0,now()-M.startAt);
+  M.recorder=rec;
+  rec.ondataavailable=e=>{if(e.data&&e.data.size)parts.push(e.data)};
+  rec.onerror=()=>toast("Recorder error — your typed notes are still safe");
+  rec.onstop=()=>{
+    if(M.rotateTimer){clearTimeout(M.rotateTimer);M.rotateTimer=null}
+    const blob=new Blob(parts,{type:rec.mimeType||mime||"audio/webm"}),idx=M.chunkIndex++;
+    if(blob.size)M.uploadChain=M.uploadChain.then(()=>uploadMeetingChunk(blob,idx,startMs)).catch(err=>{toast("A meeting chunk could not sync");console.error(err)});
+    if(M.recording)startRecorderChunk();else if(M.stopResolve){const done=M.stopResolve;M.stopResolve=null;done()}
+  };
+  rec.start();
+  M.rotateTimer=setTimeout(()=>{if(M.recording&&rec.state==="recording")rec.stop()},60000);
+}
 async function beginMeeting(){
   if(!$("meetingConsent").checked){toast("Confirm consent first");return}
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia||!window.MediaRecorder){toast("Microphone recording is unavailable here");return}
@@ -210,11 +225,8 @@ async function beginMeeting(){
     const payload={title:$("meetingTitle").value.trim()||"New Meeting",template:$("meetingTemplate").value,participants:$("meetingParticipants").value.split(",").map(x=>x.trim()).filter(Boolean),custom_vocabulary:$("meetingVocab").value.split(",").map(x=>x.trim()).filter(Boolean),consent_confirmed:true,keep_audio:$("meetingKeepAudio").checked};
     const p=await vaultFetch("/v1/meetings/start",{method:"POST",body:payload}),n=fromVaultNote(p);
     n.body="";n.folderId=null;S.note=n;const i=S.index.findIndex(x=>x.id===n.id);if(i>=0)S.index[i]=meta(n);else S.index.unshift(meta(n));await set(K.note(n.id),n);await set(K.index,S.index);
-    const mime=pickRecorderType(),rec=mime?new MediaRecorder(stream,{mimeType:mime}):new MediaRecorder(stream);
-    S.meeting={noteId:n.id,stream,recorder:rec,recording:true,startAt:now(),nextStartMs:0,chunkIndex:1,uploadChain:Promise.resolve(),tick:null};
-    rec.ondataavailable=e=>{if(!e.data||!e.data.size||!S.meeting)return;const idx=S.meeting.chunkIndex++,start=S.meeting.nextStartMs;S.meeting.nextStartMs=Math.max(start+1,now()-S.meeting.startAt);S.meeting.uploadChain=S.meeting.uploadChain.then(()=>uploadMeetingChunk(e.data,idx,start)).catch(err=>{toast("A meeting chunk could not sync");console.error(err)})};
-    rec.onerror=()=>toast("Recorder error — your typed notes are still safe");
-    rec.start(60000);S.meeting.tick=setInterval(()=>renderMeeting(S.meetingTab),1000);closeMeetingModal();enter(n);toast("Recording");
+    S.meeting={noteId:n.id,stream,recorder:null,recording:true,startAt:now(),chunkIndex:1,uploadChain:Promise.resolve(),tick:null,rotateTimer:null,stopResolve:null};
+    startRecorderChunk();S.meeting.tick=setInterval(()=>renderMeeting(S.meetingTab),1000);closeMeetingModal();enter(n);toast("Recording");
   }catch(e){stream.getTracks().forEach(t=>t.stop());toast("Could not start meeting")}
 }
 async function stopMeeting(){
@@ -223,9 +235,9 @@ async function stopMeeting(){
   try{
     await save(false);try{await flushOutbox()}catch(e){}
     if(active){
-      S.meeting.recording=false;$("meetingStatus").textContent="Finishing…";
-      await new Promise(resolve=>{S.meeting.recorder.addEventListener("stop",resolve,{once:true});S.meeting.recorder.stop()});
-      S.meeting.stream.getTracks().forEach(t=>t.stop());if(S.meeting.tick)clearInterval(S.meeting.tick);await S.meeting.uploadChain;S.meeting=null;
+      const M=S.meeting;M.recording=false;$("meetingStatus").textContent="Finishing…";if(M.rotateTimer){clearTimeout(M.rotateTimer);M.rotateTimer=null}
+      await new Promise(resolve=>{M.stopResolve=resolve;if(M.recorder&&M.recorder.state==="recording")M.recorder.stop();else resolve()});
+      M.stream.getTracks().forEach(t=>t.stop());if(M.tick)clearInterval(M.tick);await M.uploadChain;S.meeting=null;
     }
     await vaultFetch("/v1/notes/"+encodeURIComponent(S.note.id)+"/meeting/finish",{method:"POST",body:{}});
     if(S.note.metadata&&S.note.metadata.meeting)S.note.metadata.meeting.status="transcribing";
