@@ -149,7 +149,7 @@ function meetingSummaryHtml(m){
   out+=section("Uncertain",s.uncertainties,x=>'<div class="aiItem">'+h(x.text||"")+'<div class="aiMeta">'+cite(x.citations)+'</div></div>');
   return out||'<div class="empty">No AI summary yet.</div>';
 }
-function transcriptHtml(m){const segs=m.segments||[];if(!segs.length)return'<div class="empty"><b>No transcript yet</b>Transcript segments appear here as audio is processed.</div>';return segs.map(x=>'<div class="segment" id="seg-'+h(x.citation)+'"><div class="segmentTop"><b>'+h(x.speaker_label||"Speaker")+'</b><span>'+fmtElapsed(x.start_ms||0)+'</span><span>'+h(x.citation||"")+'</span></div><div>'+h(x.text||"")+'</div></div>').join("")}
+function transcriptHtml(m){const segs=m.segments||[],maps=((m.summary||{}).speaker_map||[]),names={};maps.forEach(x=>{if(x&&x.speaker_id&&x.name&&Number(x.confidence||0)>=.65)names[x.speaker_id]=x.name});if(!segs.length)return'<div class="empty"><b>No transcript yet</b>Transcript segments appear here as audio is processed.</div>';return segs.map(x=>'<div class="segment" id="seg-'+h(x.citation)+'"><div class="segmentTop"><b>'+h(names[x.speaker_id]||x.speaker_label||"Speaker")+'</b><span>'+fmtElapsed(x.start_ms||0)+'</span><span>'+h(x.citation||"")+'</span></div><div>'+h(x.text||"")+'</div></div>').join("")}
 function bindCitations(){document.querySelectorAll(".cite").forEach(b=>b.onclick=()=>{const id=b.dataset.cite;renderMeeting("transcript");setTimeout(()=>{const el=$("seg-"+id);if(el){el.scrollIntoView({block:"center"});el.classList.add("flash");setTimeout(()=>el.classList.remove("flash"),1200)}},20)})}
 function renderMeeting(tab){
   if(!S.note||!S.note.metadata||S.note.metadata.kind!=="meeting")return;
@@ -185,7 +185,7 @@ async function refreshMeeting(){
 }
 function startMeetingPoll(){clearMeetingPoll();S.meetingPoll=setInterval(refreshMeeting,5000);setTimeout(refreshMeeting,200)}
 function openMeetingModal(){
-  $("meetingTitle").value="";$("meetingTemplate").value="general";$("meetingParticipants").value="";$("meetingVocab").value="";$("meetingConsent").checked=false;$("meetingKeepAudio").checked=false;
+  $("meetingTitle").value="";$("meetingTemplate").value=S.settings.meetingTemplate||"general";$("meetingParticipants").value="";$("meetingVocab").value=S.settings.meetingVocab||"";$("meetingConsent").checked=false;$("meetingKeepAudio").checked=false;
   $("meetingModal").hidden=false;E.scrim.hidden=false;setTimeout(()=>$("meetingTitle").focus(),20)
 }
 function closeMeetingModal(){$("meetingModal").hidden=true;if(!S.sheet)E.scrim.hidden=true}
@@ -223,6 +223,7 @@ async function beginMeeting(){
   try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true}})}catch(e){toast("Microphone permission is required");return}
   try{
     const payload={title:$("meetingTitle").value.trim()||"New Meeting",template:$("meetingTemplate").value,participants:$("meetingParticipants").value.split(",").map(x=>x.trim()).filter(Boolean),custom_vocabulary:$("meetingVocab").value.split(",").map(x=>x.trim()).filter(Boolean),consent_confirmed:true,keep_audio:$("meetingKeepAudio").checked};
+    S.settings.meetingTemplate=payload.template;S.settings.meetingVocab=$("meetingVocab").value.trim();await set(K.settings,S.settings);
     const p=await vaultFetch("/v1/meetings/start",{method:"POST",body:payload}),n=fromVaultNote(p);
     n.body="";n.folderId=null;S.note=n;const i=S.index.findIndex(x=>x.id===n.id);if(i>=0)S.index[i]=meta(n);else S.index.unshift(meta(n));await set(K.note(n.id),n);await set(K.index,S.index);
     S.meeting={noteId:n.id,stream,recorder:null,recording:true,startAt:now(),chunkIndex:1,uploadChain:Promise.resolve(),tick:null,rotateTimer:null,stopResolve:null};
